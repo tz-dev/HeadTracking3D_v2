@@ -27,6 +27,12 @@ Imagine a physical window frame fixed in front of you with several objects hangi
 
 The **monitor remains the physical display boundary**. Nothing is optically projected outside its actual pixels; the feeling of objects extending toward you or passing the screen plane is a viewpoint-dependent illusion, clipped by the edges of the display. For the cleanest Lee-style window effect, choose **Window** mode. The more exploratory **Room** mode deliberately adds virtual movement and rotation; it is not a strictly measured physical reconstruction of your space.
 
+## Screenshot
+
+![HeadTracking3D — Head-Coupled Perspective Demo](img/screenshot.png)
+
+*The screen becomes a window into a virtual 3D world. Real-time head tracking adjusts the viewing perspective, creating natural motion parallax and spatial depth without VR hardware.*
+
 ### Try the effect in 30 seconds
 
 - Sit roughly **50–75 cm** from your webcam, with your face visible and evenly lit.
