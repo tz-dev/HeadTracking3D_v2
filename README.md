@@ -27,7 +27,7 @@ Imagine a physical window frame fixed in front of you with several objects hangi
 
 The **monitor remains the physical display boundary**. Nothing is optically projected outside its actual pixels; the feeling of objects extending toward you or passing the screen plane is a viewpoint-dependent illusion, clipped by the edges of the display. For the cleanest Lee-style window effect, choose **Window** mode. The more exploratory **Room** mode deliberately adds virtual movement and rotation; it is not a strictly measured physical reconstruction of your space.
 
-## Screenshot
+### Screenshot
 
 ![HeadTracking3D — Head-Coupled Perspective Demo](img/screenshot.png)
 
@@ -39,6 +39,12 @@ The **monitor remains the physical display boundary**. Nothing is optically proj
 - Start in **Window** mode. Look at a cube and slowly shift your head left and right. Watch its visible faces and its position relative to the objects behind it; compare this with simply zooming a flat image.
 - Switch to **Room** mode and repeat. Then approach and retreat from the display; experiment with **Room depth** and **Immersion** to control where the virtual room begins and how far you can move through it.
 - Optionally enable **Monitor-plane markers** and the depth-test arrow to see how the fixed screen plane relates to the movable 3D room.
+
+### Live Demo
+
+**[Try HeadTracking3D Live](https://tz-dev.github.io/HeadTracking3D_v2/)**
+
+Experience head-coupled perspective directly in your browser. A webcam is required for real-time tracking. No VR headset or additional hardware needed.
 
 ## What the upstream project provides
 
