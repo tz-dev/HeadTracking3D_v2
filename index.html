@@ -1,0 +1,1639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>HeadTracking3D — Your Screen Becomes a Window</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, sans-serif; color: #fff; }
+  #scene { display: block; width: 100vw; height: 100vh; }
+
+  #cam {
+    position: fixed; bottom: 14px; right: 14px;
+    width: 240px; height: 180px;
+    border: 2px solid rgba(255,255,255,0.25);
+    border-radius: 10px; z-index: 10;
+    overflow: hidden; background: #111;
+  }
+  #video, #overlay {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    transform: scaleX(-1);
+  }
+  #video { object-fit: cover; }
+  #overlay { pointer-events: none; }
+
+  #ui {
+    position: fixed; top: 14px; left: 14px;
+    background: rgba(0,0,0,0.55);
+    padding: 12px 14px; border-radius: 10px;
+    z-index: 10; font-size: 13px; line-height: 1.5;
+    max-width: 360px;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+  #ui h1 { font-size: 14px; margin: 0 0 6px 0; color: #5ef; font-weight: 600; }
+
+  #panel {
+    position: fixed; top: 14px; right: 14px;
+    width: 290px;
+    background: rgba(0,0,0,0.6);
+    border-radius: 10px;
+    z-index: 11;
+    font-size: 12px;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    max-height: calc(100vh - 240px);
+    display: flex; flex-direction: column;
+  }
+  #panel.collapsed #panelBody { display: none; }
+  #panel.collapsed .arrow { transform: rotate(-90deg); }
+  #panelHeader {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    cursor: pointer;
+    user-select: none;
+  }
+  #panel.collapsed #panelHeader { border-bottom: 0; }
+  #panelHeader h2 { margin: 0; font-size: 13px; color: #5ef; font-weight: 600; }
+  #panelHeader .arrow { color: #888; transition: transform 0.2s; display: inline-block; }
+  #panelBody { padding: 10px 14px 14px; overflow-y: auto; }
+  #panel section { margin-bottom: 14px; }
+  #panel section:last-child { margin-bottom: 0; }
+  #panel h3 { margin: 0 0 6px 0; font-size: 10px; color: #aab; text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; }
+  #panel label { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; cursor: pointer; line-height: 1.4; }
+  #panel label.row { justify-content: space-between; }
+  #panel label > span.lbl { flex: 0 0 78px; }
+  #panel label input[type="range"] { flex: 1; min-width: 0; accent-color: #5ef; }
+  #panel label .val { width: 38px; text-align: right; font-family: ui-monospace, monospace; font-size: 11px; color: #aaf; }
+  #panel button {
+    background: #234; color: #fff; border: 1px solid #456;
+    padding: 5px 10px; border-radius: 5px; cursor: pointer;
+    font-size: 12px; margin-right: 6px; margin-bottom: 4px;
+  }
+  #panel button:hover { background: #345; }
+  #configActions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+  #configActions button { margin: 0; }
+  #configActions #restoreConfigBtn { border-color: #765; }
+  #configStatus { margin-top: 7px; color: #9ac1d4; font-size: 10px; line-height: 1.4; }
+  #configStatus.error { color: #ff9ba6; }
+
+  .ok { color: #6f6; } .err { color: #f77; } .warn { color: #fc5; }
+  kbd { background: #222; padding: 1px 6px; border-radius: 4px; font-size: 11px; border: 1px solid #444; }
+  #metrics { margin-top: 6px; font-family: ui-monospace, Menlo, monospace; font-size: 11px; opacity: 0.75; white-space: pre-line; }
+  #hint { margin-top: 8px; font-size: 11px; opacity: 0.7; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="cam">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="overlay"></canvas>
+</div>
+
+<div id="ui">
+  <h1>Head Tracking 3D</h1>
+  <div id="status">Loading…</div>
+  <div id="metrics"></div>
+  <div id="bodyStatus" style="font-size:11px;color:#8be5ff;margin-top:4px">Body tracking: loading…</div>
+  <div id="hint">
+    <kbd>R</kbd> calibrate • <kbd>Space</kbd> pause • <kbd>H</kbd> toggle panel
+  </div>
+</div>
+
+<div id="panel">
+  <div id="panelHeader">
+    <h2>⚙ Settings</h2>
+    <span class="arrow">▾</span>
+  </div>
+  <div id="panelBody">
+    <section>
+      <h3>Mode</h3>
+      <label><input type="radio" name="mode" value="room" checked> Room (position + head/eye rotation)</label>
+      <label><input type="radio" name="mode" value="window"> Window (classic, fixed viewing direction)</label>
+      <label><input type="radio" name="mode" value="hybrid"> Hybrid (off-axis + rotation)</label>
+      <label><input type="radio" name="mode" value="look"> Look around (rotation only, FPS)</label>
+    </section>
+    <section>
+      <h3>Tracking sources</h3>
+      <label><input type="checkbox" id="useHeadPos" checked> Head position</label>
+      <label><input type="checkbox" id="useHeadRot" checked> Head rotation</label>
+      <label><input type="checkbox" id="useEyeGaze" checked> Eye gaze direction</label>
+      <label><input type="checkbox" id="useBodyFallback" checked> Body fallback when face is lost (XYZ ×3.5)</label>
+    </section>
+    <section>
+      <h3>Display</h3>
+      <label><input type="checkbox" id="showBox" checked> Tracking box</label>
+      <label><input type="checkbox" id="showLandmarks"> Facial landmarks</label>
+      <label><input type="checkbox" id="showGazeArrow" checked> Gaze direction arrow</label>
+      <label><input type="checkbox" id="showHeadAxis" checked> Head axis (eyes / nose)</label>
+      <label><input type="checkbox" id="showBodyOverlay" checked> Show body skeleton during fallback</label>
+      <label><input type="checkbox" id="freezeObjects"> Pause object animations</label>
+    </section>
+    <section>
+      <h3>Axes</h3>
+      <label><input type="checkbox" id="flipX" checked> Mirror X</label>
+      <label><input type="checkbox" id="flipYaw" checked> Invert yaw</label>
+      <label><input type="checkbox" id="flipPitch" checked> Invert pitch</label>
+      <label><input type="checkbox" id="invertZ" checked> Invert Z (near = smaller)</label>
+    </section>
+    <section>
+      <h3>Virtual room / monitor</h3>
+      <label class="row"><span class="lbl" title="Fixed position of the virtual room relative to the monitor plane at z=0">Room depth</span><input type="range" id="roomDepth" min="0" max="6" step="0.1" value="6.0"><span class="val" id="roomDepthv">6.00</span></label>
+      <label class="row"><span class="lbl" title="Additional forward travel into the virtual world as you approach; 0 = physical window perspective only">Immersion</span><input type="range" id="depthTravel" min="0" max="2.5" step="0.05" value="0.15"><span class="val" id="depthTravelv">0.15</span></label>
+      <div style="font-size:10px;color:#9ba8bc;line-height:1.45;margin:5px 0 7px">Room depth sets the virtual room’s fixed offset. In Room mode, depth-related perspective distortion is deliberately reduced: immersion and Z movement mostly move your viewpoint through the world. Window and Hybrid modes retain their original behavior. In Room mode, R recalibrates distance and neutral gaze. Position and head orientation are camera-relative: image center + facing forward = neutral. Starting off-center stays off-center. Typical viewing distance: 50–75 cm.</div>
+      <label><input type="checkbox" id="showTestArrow" checked> Test arrow crossing the monitor plane</label>
+      <label><input type="checkbox" id="showScreenPlane" checked> Show monitor-plane markers</label>
+      <div id="screenDepthInfo" style="font:11px ui-monospace, monospace;color:#9edfea;line-height:1.5">Monitor z=0 · Room +3.00 · Travel +0.00</div>
+    </section>
+    <section>
+      <h3>Sensitivity</h3>
+      <label class="row"><span class="lbl">X movement</span><input type="range" id="gainX" min="0" max="6" step="0.1" value="1.0"><span class="val" id="gainXv">1.00</span></label>
+      <label class="row"><span class="lbl">Y movement</span><input type="range" id="gainY" min="0" max="6" step="0.1" value="1.0"><span class="val" id="gainYv">1.00</span></label>
+      <label class="row"><span class="lbl" title="In Room mode, Z primarily controls travel into and out of the virtual world; only a small portion affects the perspective frustum.">Z movement</span><input type="range" id="gainZ" min="0" max="3" step="0.05" value="0.75"><span class="val" id="gainZv">0.75</span></label>
+      <label class="row"><span class="lbl" title="Horizontal head rotation, independent of lateral head translation">Head yaw</span><input type="range" id="gainYaw" min="0" max="2.5" step="0.05" value="1.0"><span class="val" id="gainYawv">1.00</span></label>
+      <label class="row"><span class="lbl" title="Vertical head rotation, independent of vertical head translation">Head pitch</span><input type="range" id="gainPitch" min="0" max="2.5" step="0.05" value="1.15"><span class="val" id="gainPitchv">1.15</span></label>
+      <label class="row"><span class="lbl" title="Additional time-based smoothing for head rotation">Head smoothing</span><input type="range" id="headSmooth" min="0" max="1" step="0.05" value="0.80"><span class="val" id="headSmoothv">0.80</span></label>
+      <label class="row"><span class="lbl" title="Subtle camera roll when tilting your head sideways">Head roll</span><input type="range" id="gainRoll" min="0" max="1.0" step="0.02" value="1.0"><span class="val" id="gainRollv">1.00</span></label>
+      <label><input type="checkbox" id="useHeadRoll" checked> Enable subtle head roll</label>
+      <label class="row"><span class="lbl" title="Eye direction relative to the inner and outer eye corners">Gaze X</span><input type="range" id="gainGazeX" min="0" max="2" step="0.05" value="0.40"><span class="val" id="gainGazeXv">0.40</span></label>
+      <label class="row"><span class="lbl" title="Eye direction relative to the upper and lower eyelids">Gaze Y</span><input type="range" id="gainGazeY" min="0" max="2" step="0.05" value="0.4"><span class="val" id="gainGazeYv">0.40</span></label>
+      <label class="row"><span class="lbl" title="0 = direct gaze response; 1 = maximum gaze smoothing">Gaze smoothing</span><input type="range" id="gazeSmooth" min="0" max="1" step="0.05" value="0.68"><span class="val" id="gazeSmoothv">0.68</span></label>
+      <label class="row"><span class="lbl" title="Treat small iris movements as rest">Gaze dead zone</span><input type="range" id="gazeDeadzone" min="0" max="0.25" step="0.01" value="0.25"><span class="val" id="gazeDeadzonev">0.25</span></label>
+      <label class="row"><span class="lbl">Body smoothing</span><input type="range" id="smooth" min="0.05" max="1" step="0.01" value="0.2"><span class="val" id="smoothv">0.20</span></label>
+      <div style="font-size:10px;color:#9ba8bc;line-height:1.45;margin:4px 0 2px">Gaze is measured from iris positions relative to the eye boundaries rather than noisy blendshapes. Head yaw/pitch and gaze X/Y affect Room, Hybrid and Look-around modes. Classic Window mode keeps its viewing direction fixed. In Room mode, the webcam image center is the position/orientation origin; R only recalibrates gaze and distance. Other modes retain their previous calibration behavior.</div>
+    </section>
+    <section>
+      <div style="font-size:10px;color:#9ba8bc;line-height:1.45;margin:4px 0 9px">Room: actual X/Y tracking, damped projection Z, virtual forward/back travel and moderated head rotation. Window: classic off-axis projection with a fixed viewing direction. Use R to set the head-neutral pose in non-Room modes. Pause object animations to compare screenshots.</div>
+      <button id="calibBtn">Calibrate</button>
+      <button id="pauseBtn">Pause</button>
+      <button id="resetBtn">Reset</button>
+    </section>
+    <section id="configSection">
+      <h3>Saved settings</h3>
+      <div id="configActions">
+        <button type="button" id="saveConfigBtn">Save settings</button>
+        <button type="button" id="exportConfigBtn">Export JSON</button>
+        <button type="button" id="importConfigBtn">Import JSON</button>
+        <button type="button" id="restoreConfigBtn">Restore defaults</button>
+      </div>
+      <input id="configImportFile" type="file" accept=".json,application/json" hidden>
+      <div id="configStatus" role="status" aria-live="polite">Settings auto-save in this browser. Export a JSON file for backup or transfer.</div>
+    </section>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { FaceLandmarker, PoseLandmarker, FilesetResolver } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9';
+
+// ============================================================
+// Larger virtual room
+// ============================================================
+const ROOM_W = 7.0;
+const ROOM_H = 4.2;
+const ROOM_DEPTH = 12.0;
+const BASE_DISTANCE = 2.5;
+// The physical monitor plane remains at world z=0. A higher roomDepth
+// translates the virtual room TOWARD the viewer (not the viewer/camera).
+// Thus the screen can cut through the world and objects can have z>0.
+// Units below are stylized world units, NOT calibrated meters. Starting
+// assumptions: webcam atop monitor; viewer normally 0.50–0.75 m away;
+// approximately 1.50 m lateral room and 2 m free fore/aft movement.
+const SCREEN_W = ROOM_W;
+const CALIBRATION_FRAMES = 10;
+const MAX_VIRTUAL_PUSH = 1.50;
+const MAX_VIRTUAL_RETREAT = 1.05;
+const TRAVEL_FALLOFF = 1.35;
+// ROOM 08: a webcam supplies an estimated distance, not a metrically
+// calibrated optical measurement. Using all of it as camera-to-screen
+// distance changes the whole off-axis frustum too aggressively.
+// Keep a small, bounded projection component; use the rest as virtual
+// forward/back travel through the scene. Classic window/hybrid unchanged.
+const ROOM_Z_PROJECTION_SHARE = 0.12;
+const ROOM_Z_PROJECTION_MAX_OFFSET = 0.18;
+const ROOM_Z_TRANSFER_SHARE = 0.82;
+const ROOM_MAX_FORWARD_TRAVEL = 1.55;
+const ROOM_MAX_BACKWARD_TRAVEL = 1.20;
+
+// ============================================================
+// Settings (controlled from the panel)
+// ============================================================
+const settings = {
+  mode: 'room',
+  useHeadPos: true,
+  useHeadRot: true,
+  useEyeGaze: true,
+  useBodyFallback: true,
+  showBodyOverlay: true,
+  showBox: true,
+  showLandmarks: false,
+  showGazeArrow: true,
+  showHeadAxis: true,
+  freezeObjects: false,
+  useHeadRoll: true,
+  gainRoll: 1.0,
+  flipX: true,
+  flipYaw: true,
+  flipPitch: true,
+  invertZ: true,
+  roomDepth: 6.0,
+  depthTravel: 0.15,
+  showTestArrow: true, showScreenPlane: true,
+  gainX: 1.0, gainY: 1.0, gainZ: 0.75,
+  gainYaw: 1.0, gainPitch: 1.15, headSmooth: 0.80,
+  gainGazeX: 0.40, gainGazeY: 0.40,
+  gazeSmooth: 0.68, gazeDeadzone: 0.25,
+  smooth: 0.20
+};
+// ============================================================
+// Local configuration (v1) – only allow-listed settings are persisted.
+// Tracking measurements and calibration offsets are session-specific.
+// ============================================================
+const CONFIG_STORAGE_KEY = 'headtracking3d.room11.settings.v1';
+const CONFIG_VERSION = 1;
+const CONFIG_BOOLEAN_KEYS = Object.freeze([
+  'useHeadPos','useHeadRot','useEyeGaze','useBodyFallback','showBodyOverlay',
+  'showBox','showLandmarks','showGazeArrow','showHeadAxis','freezeObjects',
+  'useHeadRoll','flipX','flipYaw','flipPitch','invertZ','showTestArrow','showScreenPlane'
+]);
+const CONFIG_SLIDER_KEYS = Object.freeze([
+  'gainX','gainY','gainZ','gainYaw','gainPitch','gainRoll','headSmooth',
+  'gainGazeX','gainGazeY','gazeSmooth','gazeDeadzone','smooth','roomDepth','depthTravel'
+]);
+const CONFIG_VALID_MODES = Object.freeze(['room','window','hybrid','look']);
+const CONFIG_DEFAULTS = Object.freeze({...settings});
+
+function validateConfigurationPayload(payload){
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
+      payload.version !== CONFIG_VERSION || !payload.settings ||
+      typeof payload.settings !== 'object' || Array.isArray(payload.settings)) return null;
+  const source = payload.settings;
+  const result = {...CONFIG_DEFAULTS};
+  if (CONFIG_VALID_MODES.includes(source.mode)) result.mode = source.mode;
+  for (const key of CONFIG_BOOLEAN_KEYS) {
+    if (typeof source[key] === 'boolean') result[key] = source[key];
+  }
+  for (const key of CONFIG_SLIDER_KEYS) {
+    const number = source[key];
+    if (typeof number !== 'number' || !Number.isFinite(number)) continue;
+    const control = document.getElementById(key);
+    if (!control || control.type !== 'range') continue;
+    const min = Number(control.min), max = Number(control.max);
+    const step = Number(control.step);
+    if (!Number.isFinite(min) || !Number.isFinite(max) || max < min) continue;
+    let bounded = Math.max(min, Math.min(max, number));
+    if (Number.isFinite(step) && step > 0) {
+      bounded = min + Math.round((bounded - min) / step) * step;
+      bounded = Math.max(min, Math.min(max, bounded));
+    }
+    result[key] = Number(bounded.toFixed(6));
+  }
+  return result;
+}
+function createConfigurationPayload(){
+  const values = {mode:settings.mode};
+  for (const key of [...CONFIG_BOOLEAN_KEYS, ...CONFIG_SLIDER_KEYS]) values[key] = settings[key];
+  return {version:CONFIG_VERSION, settings:values};
+}
+function readSavedConfiguration(){
+  try {
+    const encoded = window.localStorage.getItem(CONFIG_STORAGE_KEY);
+    return encoded === null ? null : validateConfigurationPayload(JSON.parse(encoded));
+  } catch (error) {
+    console.warn('Saved settings could not be loaded; using defaults.', error);
+    return null;
+  }
+}
+const storedConfiguration = readSavedConfiguration();
+if (storedConfiguration) Object.assign(settings, storedConfiguration);
+let pendingConfigSave = null;
+function showConfigStatus(message, isError = false){
+  const element = document.getElementById('configStatus');
+  if (!element) return;
+  element.textContent = message;
+  element.classList.toggle('error', isError);
+}
+function saveConfiguration(){
+  if (pendingConfigSave !== null) { clearTimeout(pendingConfigSave); pendingConfigSave = null; }
+  try {
+    window.localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(createConfigurationPayload()));
+    showConfigStatus('Saved in this browser. Export JSON to keep a portable backup.');
+    return true;
+  } catch (error) {
+    console.warn('Could not save settings to browser storage.', error);
+    showConfigStatus('Browser storage is unavailable. Use Export JSON to back up your settings.', true);
+    return false;
+  }
+}
+function scheduleConfigurationSave(){
+  if (pendingConfigSave !== null) clearTimeout(pendingConfigSave);
+  pendingConfigSave = setTimeout(() => { pendingConfigSave = null; saveConfiguration(); }, 250);
+}
+let paused = false;
+
+// ============================================================
+const statusEl  = document.getElementById('status');
+const metricsEl = document.getElementById('metrics');
+const video     = document.getElementById('video');
+const canvas    = document.getElementById('scene');
+const overlay   = document.getElementById('overlay');
+const octx      = overlay.getContext('2d');
+
+// ---------- Three.js Setup ----------
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+function resize() { renderer.setSize(window.innerWidth, window.innerHeight, false); }
+resize();
+window.addEventListener('resize', resize);
+
+const scene = new THREE.Scene();
+const worldRoot = new THREE.Group();
+scene.add(worldRoot);
+scene.background = new THREE.Color(0x05050a);
+scene.fog = new THREE.Fog(0x05050a, 6, 22);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+const key = new THREE.DirectionalLight(0xffffff, 0.9);
+key.position.set(2, 4, 1);
+scene.add(key);
+
+const lightCfgs = [
+  { color: 0x55aaff, pos: [-2.5, 1.2, -3], intensity: 2.5, dist: 14 },
+  { color: 0xff7733, pos: [ 2.5, -0.5, -2], intensity: 2.0, dist: 12 },
+  { color: 0xff44ff, pos: [-1.8, 1.5, -8], intensity: 2.5, dist: 12 },
+  { color: 0x77ff77, pos: [ 1.5, -1.0, -10], intensity: 2.2, dist: 12 },
+];
+for (const cfg of lightCfgs) {
+  const l = new THREE.PointLight(cfg.color, cfg.intensity, cfg.dist);
+  l.position.set(...cfg.pos);
+  worldRoot.add(l);
+}
+
+// Box-shaped room
+const wallMat = new THREE.MeshStandardMaterial({ color: 0x1a1a28, side: THREE.BackSide, roughness: 0.95 });
+// BoxGeometry material order: +X,-X,+Y,-Y,+Z,-Z.
+// +Z is the room's front cap; keep it OPEN so the viewer can sit inside
+// the virtual room once the screen plane has been moved into the room.
+const noFrontWall = new THREE.MeshBasicMaterial({visible:false});
+const room = new THREE.Mesh(new THREE.BoxGeometry(ROOM_W, ROOM_H, ROOM_DEPTH),
+  [wallMat, wallMat, wallMat, wallMat, noFrontWall, wallMat]);
+room.position.z = -ROOM_DEPTH / 2;
+worldRoot.add(room);
+
+// Gitter
+function addGrid() {
+  const halfW = ROOM_W/2, halfH = ROOM_H/2, d = ROOM_DEPTH;
+  const lineMat = new THREE.LineBasicMaterial({ color: 0x3344aa, transparent: true, opacity: 0.5 });
+  const seg = (a, b) => new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), lineMat);
+  const N = 12;
+  for (let i = 1; i < N; i++) {
+    const t = i / N;
+    worldRoot.add(seg(new THREE.Vector3(-halfW + t*ROOM_W, -halfH, -d), new THREE.Vector3(-halfW + t*ROOM_W, halfH, -d)));
+    worldRoot.add(seg(new THREE.Vector3(-halfW, -halfH + t*ROOM_H, -d), new THREE.Vector3(halfW, -halfH + t*ROOM_H, -d)));
+    const z = -t * d;
+    worldRoot.add(seg(new THREE.Vector3(-halfW, -halfH, z), new THREE.Vector3(-halfW, halfH, z)));
+    worldRoot.add(seg(new THREE.Vector3( halfW, -halfH, z), new THREE.Vector3( halfW, halfH, z)));
+    worldRoot.add(seg(new THREE.Vector3(-halfW, -halfH, z), new THREE.Vector3( halfW, -halfH, z)));
+    worldRoot.add(seg(new THREE.Vector3(-halfW,  halfH, z), new THREE.Vector3( halfW,  halfH, z)));
+  }
+}
+addGrid();
+
+// Objekte
+function addObj(geo, color, x, y, z, props = {}) {
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.3, ...props }));
+  m.position.set(x, y, z);
+  worldRoot.add(m);
+  return m;
+}
+
+const cube    = addObj(new THREE.BoxGeometry(0.9, 0.9, 0.9),                 0xff5533,  0,    0,   -3.0);
+const sphere  = addObj(new THREE.SphereGeometry(0.6, 48, 48),                0x33ddff, -1.8, 0.5, -4.5, { metalness: 0.6, roughness: 0.2 });
+const torus   = addObj(new THREE.TorusKnotGeometry(0.45, 0.16, 128, 16),     0x88ff66,  1.9, -0.4,-4.0, { metalness: 0.5 });
+const cone    = addObj(new THREE.ConeGeometry(0.55, 1.2, 32),                0xffaa33, -2.4, -1.0,-2.5);
+const octa    = addObj(new THREE.OctahedronGeometry(0.6),                    0xff44ff,  2.4, 1.2, -6.0, { metalness: 0.4 });
+const dodec   = addObj(new THREE.DodecahedronGeometry(0.55),                 0xffee44,  0,   1.5, -8.0, { metalness: 0.5 });
+const icos    = addObj(new THREE.IcosahedronGeometry(0.5),                   0x44ffaa, -2.0, -1.5,-7.0, { metalness: 0.4 });
+const cyl     = addObj(new THREE.CylinderGeometry(0.4, 0.4, 1.2, 24),        0xaa66ff,  2.0, 0.6, -8.5);
+const torus2  = addObj(new THREE.TorusGeometry(0.55, 0.2, 16, 64),           0xffffff,  0,   -0.9,-5.5, { metalness: 0.7 });
+const backCube= addObj(new THREE.BoxGeometry(0.7, 0.7, 0.7),                 0xff8888,  0,    0,  -10.5, { metalness: 0.3 });
+const tetra   = addObj(new THREE.TetrahedronGeometry(0.55),                  0x55ffee,  -2.5,1.4, -9.5, { metalness: 0.4 });
+const sphereR = addObj(new THREE.SphereGeometry(0.4, 32, 32),                0xff9966,   2.5,-1.3,-9.0, { metalness: 0.3 });
+
+const animObjs = [cube, sphere, torus, cone, octa, dodec, icos, cyl, torus2, backCube, tetra, sphereR];
+
+// schwebende Punkte
+for (let i = 0; i < 80; i++) {
+  const m = new THREE.Mesh(
+    new THREE.SphereGeometry(0.05, 12, 12),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x445588 })
+  );
+  m.position.set(
+    (Math.random() - 0.5) * (ROOM_W - 0.6),
+    (Math.random() - 0.5) * (ROOM_H - 0.6),
+    -Math.random() * (ROOM_DEPTH - 0.6)
+  );
+  worldRoot.add(m);
+}
+
+// An unmistakable test of a genuine z=0 crossing: the cyan arrow points
+// towards the real viewer and spans both sides of the monitor plane at
+// the default roomDepth=3.0 (its tip has local z=-1.33 => world z=+1.67).
+const protrusionArrow = new THREE.Group();
+protrusionArrow.position.set(0.65, 0.15, -3.10);
+const arrowMaterial = new THREE.MeshStandardMaterial({color:0x6ceeff,emissive:0x08769a,emissiveIntensity:.8,metalness:.35,roughness:.25});
+const shaft = new THREE.Mesh(new THREE.CylinderGeometry(.065,.065,2.4,16), arrowMaterial);
+shaft.rotation.x = Math.PI / 2;
+protrusionArrow.add(shaft);
+const arrowHead = new THREE.Mesh(new THREE.ConeGeometry(.27,.7,24), arrowMaterial);
+arrowHead.rotation.x = Math.PI / 2;
+arrowHead.position.z = 1.42;
+protrusionArrow.add(arrowHead);
+const arrowTail = new THREE.Mesh(new THREE.TorusGeometry(.17,.027,10,32), arrowMaterial);
+arrowTail.position.z = -1.25;
+protrusionArrow.add(arrowTail);
+worldRoot.add(protrusionArrow);
+
+// This guide is deliberately NOT a child of worldRoot. Like a real monitor,
+// it stays at z=0 while the room (and its protruding objects) move through it.
+const screenPlaneMat = new THREE.LineBasicMaterial({color:0xffdb88, transparent:true,opacity:.82,depthTest:false,depthWrite:false});
+const screenPlaneGuide = new THREE.LineSegments(new THREE.BufferGeometry(), screenPlaneMat);
+screenPlaneGuide.renderOrder = 99;
+scene.add(screenPlaneGuide);
+function rebuildScreenPlaneGuide(){
+  const halfW=SCREEN_W*.5, halfH=(SCREEN_W / (window.innerWidth/window.innerHeight))*.5;
+  const tick=.23, margin=.065, z=.002;
+  const verts=[];
+  for(const sx of [-1,1]) for(const sy of [-1,1]) {
+    const x=sx*(halfW-margin), y=sy*(halfH-margin);
+    verts.push(x,y,z, x-sx*tick,y,z);
+    verts.push(x,y,z, x,y-sy*tick,z);
+  }
+  screenPlaneGuide.geometry.dispose();
+  screenPlaneGuide.geometry=new THREE.BufferGeometry();
+  screenPlaneGuide.geometry.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));
+}
+rebuildScreenPlaneGuide();
+window.addEventListener('resize',rebuildScreenPlaneGuide);
+
+// The screen plane stays fixed at z=0. This virtual room may move through
+// it, creating the sensation of walking into the scene while the physical
+// screen geometry stays stationary.
+function computeVirtualTravel(faceSize, referenceFaceSize, strength) {
+  if (!Number.isFinite(faceSize) || !Number.isFinite(referenceFaceSize) ||
+      faceSize <= 0 || referenceFaceSize <= 0 || !Number.isFinite(strength) || strength <= 0) return 0;
+  const relativeDistance = BASE_DISTANCE * (1 - referenceFaceSize / faceSize);
+  const limit = relativeDistance >= 0 ? MAX_VIRTUAL_PUSH : MAX_VIRTUAL_RETREAT;
+  return strength * limit * Math.tanh(relativeDistance / TRAVEL_FALLOFF);
+}
+function computeRoomProjectionZ(estimatedZ) {
+  // Return to exact reference camera distance at the calibrated position.
+  // Even when the face comes very close, projection FOV changes only mildly.
+  const dz = THREE.MathUtils.clamp(estimatedZ-BASE_DISTANCE, -ROOM_Z_PROJECTION_MAX_OFFSET/ROOM_Z_PROJECTION_SHARE, ROOM_Z_PROJECTION_MAX_OFFSET/ROOM_Z_PROJECTION_SHARE);
+  return BASE_DISTANCE + dz*ROOM_Z_PROJECTION_SHARE;
+}
+function computeRoomTravel(faceSize, referenceFaceSize, strength, estimatedZ) {
+  const projectionZ=computeRoomProjectionZ(estimatedZ);
+  // The distance that no longer distorts the lens is converted into a
+  // signed, physical-looking translation through the virtual world.
+  // Nearer face -> estimatedZ smaller -> positive forward travel.
+  const transferred = (projectionZ-estimatedZ)*ROOM_Z_TRANSFER_SHARE;
+  const intentional = computeVirtualTravel(faceSize,referenceFaceSize,strength);
+  return THREE.MathUtils.clamp(intentional+transferred,-ROOM_MAX_BACKWARD_TRAVEL,ROOM_MAX_FORWARD_TRAVEL);
+}
+let virtualTravel = 0;
+let targetVirtualTravel = 0;
+let legacyVirtualTravel = 0;
+let depthInfoLast = '';
+function applyRoomDepth() {
+  const effectiveDepth = settings.roomDepth + (settings.mode === 'room' ? virtualTravel : legacyVirtualTravel);
+  worldRoot.position.z = effectiveDepth;
+  protrusionArrow.visible = settings.showTestArrow;
+  screenPlaneGuide.visible = settings.showScreenPlane;
+  const shownTravel = settings.mode === 'room' ? virtualTravel : legacyVirtualTravel;
+  const info = `Monitor z=0 · Room +${effectiveDepth.toFixed(2)} · Travel ${shownTravel >= 0 ? '+' : ''}${shownTravel.toFixed(2)}`;
+  if (info !== depthInfoLast) {
+    document.getElementById('screenDepthInfo').textContent = info;
+    depthInfoLast = info;
+  }
+}
+applyRoomDepth();
+
+// Camera
+const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 80);
+scene.add(camera);
+
+// Tracking state (raw + smoothed)
+let headX = 0, headY = 0, headZ = BASE_DISTANCE;
+let rawX = 0,  rawY = 0,  rawZ = BASE_DISTANCE;
+let headYaw = 0, headPitch = 0, headRoll = 0;
+let rawYaw = 0, rawPitch = 0, rawRoll = 0;
+let gazeX = 0, gazeY = 0;
+let rawGazeX = 0, rawGazeY = 0;
+let lastFaceSize = 0.18;
+let calibBaseFaceSize = 0.18;
+let referenceReady = false;
+let visibleFace = false;
+const calibrationSamples = [];
+const anchorCalibrationX=[], anchorCalibrationY=[];
+const yawCalibration=[], pitchCalibration=[], rollCalibration=[];
+const headYawHistory=[], headPitchHistory=[], headRollHistory=[];
+const anchorNeutral={x:.5,y:.45};
+const orientationNeutral={yaw:0,pitch:0,roll:0};
+let eyeRollNeutral=0;
+let anchorNeutralReady=false, orientationNeutralReady=false, eyeRollNeutralReady=false;
+let latestHeadAnchor=null;
+let latestHeadOrientation=null;
+let latestEyeLineRoll=null;
+let lastBox = null;
+let lastLandmarks = null;
+let arrowAnchorX=null, arrowAnchorY=null;
+
+function updateCamera() {
+  // Translation and rotation are independent: the calibrated eye anchor
+  // determines x/y position; the facial transform determines yaw/pitch.
+  const ex = settings.useHeadPos ? headX : 0;
+  const ey = settings.useHeadPos ? headY : 0;
+  const estimatedZ = settings.useHeadPos ? headZ : BASE_DISTANCE;
+  // Only the immersive room uses softened Z projection. Other modes retain
+  // the established physical off-axis formula and the original Z slider.
+  const ez = settings.mode === 'room' ? computeRoomProjectionZ(estimatedZ) : estimatedZ;
+  camera.position.set(ex, ey, ez);
+
+  let yaw = 0, pitch = 0, roll = 0;
+  if (settings.mode !== 'window') {
+    if (settings.useHeadRot) {
+      yaw   += headYaw * settings.gainYaw;
+      pitch += headPitch * settings.gainPitch;
+      if (settings.useHeadRoll) roll += headRoll * settings.gainRoll;
+    }
+    if (settings.useEyeGaze) {
+      yaw   += gazeX * settings.gainGazeX;
+      pitch += gazeY * settings.gainGazeY;
+    }
+  }
+  // Keep extreme tracking estimates from turning the camera upside down.
+  yaw = THREE.MathUtils.clamp(yaw, -1.05, 1.05);
+  pitch = THREE.MathUtils.clamp(pitch, -0.78, 0.78);
+  roll = THREE.MathUtils.clamp(roll, -0.23, 0.23);
+  camera.rotation.order = 'YXZ';
+  camera.rotation.set(pitch, yaw, roll);
+
+  if (settings.mode === 'look') {
+    camera.fov = 70;
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+  } else {
+    const near = 0.05, far = 80;
+    const k = near / Math.max(ez, 0.1);
+    // Screen-plane geometry MUST match the actual viewport aspect ratio.
+    // Otherwise a fixed z=0 coordinate does not stay at the same pixel.
+    const screenH = SCREEN_W / Math.max(0.1, window.innerWidth / window.innerHeight);
+    const left   = (-SCREEN_W/2 - ex) * k;
+    const right  = ( SCREEN_W/2 - ex) * k;
+    const bottom = (-screenH/2 - ey) * k;
+    const top    = ( screenH/2 - ey) * k;
+    camera.projectionMatrix.makePerspective(left, right, top, bottom, near, far);
+    camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+  }
+}
+
+// ---------- Webcam ----------
+async function startCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { width: 640, height: 480, facingMode: 'user' },
+    audio: false
+  });
+  video.srcObject = stream;
+  await new Promise(r => video.onloadedmetadata = r);
+  await video.play();
+  overlay.width = video.videoWidth;
+  overlay.height = video.videoHeight;
+}
+
+// ---------- MediaPipe Face + Pose Landmarker ----------
+let landmarker = null;
+let visionFileset = null;
+async function initFaceLandmarker() {
+  const vision = await FilesetResolver.forVisionTasks(
+    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm'
+  );
+  visionFileset = vision;
+  landmarker = await FaceLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+      delegate: 'GPU'
+    },
+    outputFaceBlendshapes: true,
+    outputFacialTransformationMatrixes: true,
+    runningMode: 'VIDEO',
+    numFaces: 1
+  });
+}
+
+
+function updateDepthEstimate(size) {
+  if(referenceReady) {
+    const ratio=settings.invertZ
+      ? calibBaseFaceSize/Math.max(size,.04)
+      : Math.max(size,.04)/calibBaseFaceSize;
+    rawZ=THREE.MathUtils.clamp(BASE_DISTANCE*Math.pow(ratio,settings.gainZ),.6,7.0);
+    targetVirtualTravel=settings.useHeadPos
+      ?computeRoomTravel(size,calibBaseFaceSize,settings.depthTravel,rawZ):0;
+  } else { rawZ=BASE_DISTANCE; targetVirtualTravel=0; }
+}
+
+// ===== BODY_FALLBACK_CORE_START =====
+// When face tracking is missing, body position/scale drives XYZ only.
+// Camera targets change immediately, but rendered camera movement is speed-limited.
+const BODY_XYZ_GAIN = 3.5;
+const BODY_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+const BODY_SAMPLE_MAX_AGE = 380;
+const BODY_RECOVERY_MS = 350;
+let poseLandmarker = null;
+let poseState = 'loading';
+let lastPoseAttempt = -Infinity;
+let poseErrors = 0;
+let bodyInferenceMs = 0;
+let bodySample = null;
+let bodyBridge = null;
+let previousAcceptedBody = null;
+let pendingBodyRelocation = null; // a large displacement needs two consistent pose samples
+let bodyFallbackBasis = null;     // pose at handoff; relative XYZ receives the 3.5x gain
+let bodyEvidenceAt = -Infinity;   // keep reference through a short pose-reacquisition gap
+let bodyFallbackActive = false;
+let faceReturnBlend = null;
+let trackingSource = 'WAITING';
+let faceSizeForDepth = 0.18;
+const bodyStatusEl = document.getElementById('bodyStatus');
+
+function posePointValid(p) {
+  return p && Number.isFinite(p.x) && Number.isFinite(p.y) &&
+    (p.visibility === undefined || p.visibility >= 0.30);
+}
+function bodyAnchorFromPose(points, timestamp) {
+  const l=points?.[11], r=points?.[12]; // left / right shoulder
+  if(!posePointValid(l)||!posePointValid(r))return null;
+  const width=Math.hypot(r.x-l.x,r.y-l.y);
+  if(!Number.isFinite(width)||width<0.025)return null;
+  const sx=(l.x+r.x)*.5, sy=(l.y+r.y)*.5;
+  const lh=points?.[23], rh=points?.[24];
+  let height=null;
+  if(posePointValid(lh)&&posePointValid(rh)) {
+    const hx=(lh.x+rh.x)*.5, hy=(lh.y+rh.y)*.5;
+    const torso=Math.hypot(hx-sx,hy-sy);
+    if(torso>0.035)height=torso;
+  }
+  const nose=points?.[0];
+  const faceHint=posePointValid(nose)
+    ? {x:nose.x,y:nose.y}
+    : {x:sx,y:sy-width*.46};
+  return {x:sx,y:sy,width,height,timestamp,points,faceHint};
+}
+function sameBodyCandidate(current,previous,now) {
+  if(!previous||now-previous.timestamp>1000)return true;
+  const distance=Math.hypot(current.x-previous.x,current.y-previous.y);
+  const sizeRatio=current.width/Math.max(previous.width,.001);
+  // Disallow one-frame identity swaps to a different person in the image.
+  return distance<=Math.max(.24,previous.width*1.8) && sizeRatio>=.42 && sizeRatio<=2.4;
+}
+function bodyMatchesFace(sample,box) {
+  if(!sample?.faceHint||!box)return false;
+  const x=box.x+box.w*.5,y=box.y+box.h*.5;
+  return Math.hypot(sample.faceHint.x-x,sample.faceHint.y-y)<=Math.max(.14,1.35*sample.width);
+}
+function bodyScaleRatio(current,baseline) {
+  if(!current||!baseline||baseline.width<=0)return null;
+  const widthRatio=current.width/baseline.width;
+  const heightRatio=current.height && baseline.height ? current.height/baseline.height : null;
+  const ratio=heightRatio && Number.isFinite(heightRatio)
+    ? .72*widthRatio+.28*heightRatio : widthRatio;
+  return Number.isFinite(ratio) ? Math.max(.18,Math.min(4.5,ratio)) : null;
+}
+function estimateFaceFromBody(current,bridge) {
+  if(!current||!bridge)return null;
+  const scale=bodyScaleRatio(current,bridge.body);
+  if(!scale)return null;
+  // Scale the shoulder-to-face offset too: when approaching the webcam, the
+  // head/shoulders become larger but stay attached to the same body.
+  return {
+    x:current.x+(bridge.face.x-bridge.body.x)*scale,
+    y:current.y+(bridge.face.y-bridge.body.y)*scale,
+    size:Math.max(.035,Math.min(1.2,bridge.face.size*scale)),
+    scale
+  };
+}
+function bodyFaceCoordinates(faceCenterX,faceCenterY,gainX,gainY,flipX) {
+  return {
+    x:(flipX ? -1:1)*(faceCenterX-.5)*2*gainX,
+    y:-(faceCenterY-.5)*2*gainY
+  };
+}
+function blendNumeric(from,to,progress) {
+  const t=Math.min(1,Math.max(0,progress));
+  const eased=t*t*(3-2*t);
+  return from+(to-from)*eased;
+}
+function captureBodyBridge(sample,box) {
+  if(!sample||!box||!Number.isFinite(box.h)||box.h<.05||!bodyMatchesFace(sample,box))return;
+  bodyBridge={
+    body:{x:sample.x,y:sample.y,width:sample.width,height:sample.height},
+    face:{x:box.x+box.w*.5,y:box.y+box.h*.5,size:box.h}
+  };
+}
+function bodyEstimatedZ(size) {
+  if(!referenceReady || !Number.isFinite(size) || size<=0)return null;
+  const ratio=settings.invertZ
+    ? calibBaseFaceSize/Math.max(size,.04)
+    : Math.max(size,.04)/calibBaseFaceSize;
+  return THREE.MathUtils.clamp(BASE_DISTANCE*Math.pow(ratio,settings.gainZ),.6,7.0);
+}
+function neutralizeViewTargets() {
+  rawX=0;rawY=0;rawZ=BASE_DISTANCE;
+  rawYaw=0;rawPitch=0;rawRoll=0;
+  rawGazeX=0;rawGazeY=0;
+  targetVirtualTravel=0;
+  // Do not reset the SMOOTHED values here: the camera must fly home.
+}
+function neutralizeRotationTargets() {
+  rawYaw=0;rawPitch=0;rawRoll=0;
+  rawGazeX=0;rawGazeY=0;
+}
+function applyFallbackPose(sample, now) {
+  if(!sample || now-sample.timestamp>BODY_SAMPLE_MAX_AGE || !settings.useBodyFallback || settings.mode!=='room') return false;
+  let faceGuess=estimateFaceFromBody(sample,bodyBridge);
+  if(!faceGuess)faceGuess={x:sample.x,y:sample.y-sample.width*.46,size:null};
+  const pos=bodyFaceCoordinates(faceGuess.x,faceGuess.y,settings.gainX,settings.gainY,settings.flipX);
+  const estimatedZ=bodyEstimatedZ(faceGuess.size);
+  if(!bodyFallbackBasis) {
+    // Start precisely at the last FACE camera target, not at an unrelated
+    // re-scaled body absolute position. Only subsequent body DELTAS are 3.5x.
+    const independentStart=trackingSource==='RETURN_TO_NEUTRAL'||trackingSource==='WAITING';
+    bodyFallbackBasis={
+      pos, estimatedZ,
+      x:independentStart ? THREE.MathUtils.clamp(pos.x*BODY_XYZ_GAIN,-settings.gainX*BODY_XYZ_GAIN,settings.gainX*BODY_XYZ_GAIN) : rawX,
+      y:independentStart ? THREE.MathUtils.clamp(pos.y*BODY_XYZ_GAIN,-settings.gainY*BODY_XYZ_GAIN,settings.gainY*BODY_XYZ_GAIN) : rawY,
+      z:independentStart && estimatedZ!==null
+        ? THREE.MathUtils.clamp(BASE_DISTANCE+(estimatedZ-BASE_DISTANCE)*BODY_XYZ_GAIN,.6,7.0)
+        : rawZ,
+      faceSize:faceGuess.size
+    };
+    headYawHistory.length=0;headPitchHistory.length=0;headRollHistory.length=0;
+    eyeHistoryX.length=0;eyeHistoryY.length=0;
+  }
+  const basis=bodyFallbackBasis;
+  rawX=THREE.MathUtils.clamp(
+    basis.x+(pos.x-basis.pos.x)*BODY_XYZ_GAIN,
+    -settings.gainX*BODY_XYZ_GAIN,settings.gainX*BODY_XYZ_GAIN);
+  rawY=THREE.MathUtils.clamp(
+    basis.y+(pos.y-basis.pos.y)*BODY_XYZ_GAIN,
+    -settings.gainY*BODY_XYZ_GAIN,settings.gainY*BODY_XYZ_GAIN);
+  if(estimatedZ !== null && basis.estimatedZ !== null) {
+    rawZ=THREE.MathUtils.clamp(
+      basis.z+(estimatedZ-basis.estimatedZ)*BODY_XYZ_GAIN,.6,7.0);
+    // Transfer depth to scene motion instead of expanding the lens.
+    targetVirtualTravel=computeRoomTravel(faceGuess.size,calibBaseFaceSize,settings.depthTravel,rawZ);
+    lastFaceSize=faceGuess.size;faceSizeForDepth=faceGuess.size;
+  }
+  // No orientation/gaze tracking from shoulders. Aim for frontal neutral.
+  neutralizeRotationTargets();
+  trackingSource=estimatedZ!==null?'BODY':'BODY (X/Y)';
+  bodyFallbackActive=true;
+  return true;
+}
+function handleMissingFace(ts) {
+  lastLandmarks=null;lastBox=null;visibleFace=false;
+  faceReturnBlend=null;
+  if(applyFallbackPose(bodySample,ts)) {
+    statusEl.innerHTML='<span class="ok">● Body detected · view returning to neutral</span>';
+    if(settings.showBodyOverlay)bodyOverlaySample(octx,bodySample,overlay.width,overlay.height);
+  } else {
+    bodyFallbackActive=false;
+    // A temporary identity/pose drop must not erase the last good body
+    // reference while a large relocation is being confirmed.
+    if(ts-bodyEvidenceAt>1100)bodyFallbackBasis=null;
+    trackingSource='RETURN_TO_NEUTRAL';
+    neutralizeViewTargets();
+    statusEl.innerHTML='<span class="warn">○ Tracking lost · returning to neutral</span>';
+  }
+  updateBodyStatus();
+}
+
+function bodyOverlaySample(ctx, sample, w, h) {
+  if(!sample?.points)return;
+  const pts=sample.points;
+  const bones=[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24]];
+  ctx.save();ctx.lineWidth=2.2;ctx.strokeStyle='#68f2d0';ctx.fillStyle='#68f2d0';
+  for(const [i,j] of bones){
+    const a=pts[i],b=pts[j];if(!posePointValid(a)||!posePointValid(b))continue;
+    ctx.beginPath();ctx.moveTo(a.x*w,a.y*h);ctx.lineTo(b.x*w,b.y*h);ctx.stroke();
+  }
+  for(const i of [11,12,13,14,15,16,23,24]){
+    const p=pts[i];if(!posePointValid(p))continue;
+    ctx.beginPath();ctx.arc(p.x*w,p.y*h,3,0,Math.PI*2);ctx.fill();
+  }
+  ctx.restore();
+}
+function updateBodyStatus() {
+  const suffix=poseState==='ready' ? `Body tracking ready${bodyBridge?' / linked':''}` : `Body tracking: ${poseState}`;
+  bodyStatusEl.textContent=`Source: ${trackingSource} · ${suffix}`;
+}
+// ===== BODY_FALLBACK_CORE_END =====
+
+async function initBodyLandmarker() {
+  poseState='loading';updateBodyStatus();
+  const opts={
+    baseOptions:{modelAssetPath:BODY_MODEL_URL,delegate:'GPU'},
+    runningMode:'VIDEO', numPoses:1,
+    minPoseDetectionConfidence:.4,minPosePresenceConfidence:.4,minTrackingConfidence:.42,
+    outputSegmentationMasks:false
+  };
+  try {
+    try { poseLandmarker=await PoseLandmarker.createFromOptions(visionFileset,opts); }
+    catch(gpuError) {
+      console.warn('Pose GPU delegate unavailable; trying CPU:',gpuError);
+      poseLandmarker=await PoseLandmarker.createFromOptions(visionFileset,{...opts,baseOptions:{...opts.baseOptions,delegate:'CPU'}});
+    }
+    poseState='ready';
+  } catch(error) {
+    poseState='unavailable';
+    console.warn('Body fallback could not be loaded; face tracking continues:',error);
+  }
+  updateBodyStatus();
+}
+function updateBodyInference(timestamp) {
+  if(!settings.useBodyFallback||!poseLandmarker || video.readyState<2)return false;
+  const interval=Math.max(visibleFace?120:75,bodyInferenceMs*(visibleFace?5:3)); // adapt to slower CPUs
+  if(timestamp-lastPoseAttempt<interval)return false;
+  lastPoseAttempt=timestamp;
+  try {
+    const inferenceStart=performance.now();
+    const result=poseLandmarker.detectForVideo(video,timestamp);
+    bodyInferenceMs=bodyInferenceMs*.75+(performance.now()-inferenceStart)*.25;
+    const candidate=bodyAnchorFromPose(result.landmarks?.[0],timestamp);
+    if(candidate && sameBodyCandidate(candidate,previousAcceptedBody,timestamp)) {
+      bodySample=candidate;
+      previousAcceptedBody=candidate;
+      bodyEvidenceAt=timestamp;
+      pendingBodyRelocation=null;
+    } else if(candidate) {
+      // Could be a fast walk/teleport OR another person. Require a second
+      // consistent observation before switching the tracked body identity.
+      const confirmed=pendingBodyRelocation &&
+        timestamp-pendingBodyRelocation.timestamp < 800 &&
+        sameBodyCandidate(candidate,pendingBodyRelocation,timestamp);
+      pendingBodyRelocation=confirmed?null:candidate;
+      if(confirmed){bodySample=candidate;previousAcceptedBody=candidate;bodyEvidenceAt=timestamp;}
+      else bodySample=null;
+    } else {bodySample=null;pendingBodyRelocation=null;}
+    poseErrors=0;
+    return true;
+  } catch(e) {
+    poseErrors++;
+    if(poseErrors===1)console.warn('Pose frame failed:',e);
+    if(poseErrors>=5){
+      poseState='runtime error';
+      try{poseLandmarker.close();}catch(_){}
+      poseLandmarker=null;updateBodyStatus();
+    }
+    return false;
+  }
+}
+
+// ---------- Stabilized eye direction ----------
+// MediaPipe iris centers 468/473 are read in the face's local eye coordinate
+// system, NOT estimated from blendshape scores. This makes the direction much
+// less sensitive to eyelid shape and head roll. Neither gaze nor head rotation
+// is interpreted as *head translation*. Those remain separate sensor inputs.
+function measureIrisGaze(points) {
+  if (!points || points.length < 474) return null;
+  const samples = [];
+  for (const ids of [
+    {corners:[33,133], lids:[159,145], iris:468},
+    {corners:[362,263], lids:[386,374], iris:473}
+  ]) {
+    const a=points[ids.corners[0]], b=points[ids.corners[1]],
+          upper=points[ids.lids[0]], lower=points[ids.lids[1]], iris=points[ids.iris];
+    if (![a,b,upper,lower,iris].every(p=>p && Number.isFinite(p.x) && Number.isFinite(p.y))) continue;
+    const left=a.x<=b.x?a:b, right=a.x<=b.x?b:a;
+    const vx=right.x-left.x, vy=right.y-left.y;
+    const width=Math.hypot(vx,vy);
+    if(width<0.018)continue;
+    const ex=vx/width, ey=vy/width; // local +x is image-right
+    const upx=-ey, upy=ex;         // local +y is image-down
+    const opening=(lower.x-upper.x)*upx+(lower.y-upper.y)*upy;
+    // Ignore blinks, almost closed eyes and extreme angled/occluded eyes.
+    if(opening<width*.13)continue;
+    const midx=(left.x+right.x)*.5, midy=(left.y+right.y)*.5;
+    const lidmidx=(upper.x+lower.x)*.5, lidmidy=(upper.y+lower.y)*.5;
+    const x=2*((iris.x-midx)*ex+(iris.y-midy)*ey)/width;
+    const y=2*((iris.x-lidmidx)*upx+(iris.y-lidmidy)*upy)/Math.max(opening,width*.17);
+    if(!Number.isFinite(x)||!Number.isFinite(y)||Math.abs(x)>1.6||Math.abs(y)>2.2)continue;
+    samples.push({x,y});
+  }
+  if(samples.length!==2)return null;
+  // Both eyes must agree; disagreement is normally blink/occlusion/noise.
+  if(Math.abs(samples[0].x-samples[1].x)>.85||Math.abs(samples[0].y-samples[1].y)>1.3)return null;
+  return {x:THREE.MathUtils.clamp((samples[0].x+samples[1].x)*.5,-1,1),
+          y:THREE.MathUtils.clamp((samples[0].y+samples[1].y)*.5,-1.2,1.2)};
+}
+function median(values) {
+  if (!values.length) return 0;
+  const ordered=[...values].sort((a,b)=>a-b);
+  return ordered[Math.floor(ordered.length/2)];
+}
+function applyGazeDeadzone(v,zone) {
+  const z=Math.max(0,Math.min(.4,zone));
+  if(Math.abs(v)<=z)return 0;
+  return Math.sign(v)*(Math.abs(v)-z)/(1-z);
+}
+function gazeStep(current,target,dt,stability) {
+  // Time-constant smoothing is stable at 30 / 60 / 120 Hz, unlike a fixed
+  // per-render-frame interpolation. At maximum smoothing the eye remains
+  // responsive but does not visibly twitch at every inference update.
+  const tau=.014+Math.pow(Math.max(0,Math.min(1,stability)),2)*.32;
+  const alpha=1-Math.exp(-Math.max(0,Math.min(.1,dt))/tau);
+  const next=current+(target-current)*alpha;
+  return Math.abs(target-current)<.004 ? current : next;
+}
+const eyeHistoryX=[], eyeHistoryY=[];
+let eyeNeutralX=0, eyeNeutralY=0;
+let lastMeasuredIris=null;
+let gazeReady=false;
+const eyeCalibrationX=[], eyeCalibrationY=[];
+function resetEyeTracking(){
+  eyeHistoryX.length=0; eyeHistoryY.length=0;
+  eyeCalibrationX.length=0; eyeCalibrationY.length=0;
+  eyeNeutralX=0; eyeNeutralY=0; lastMeasuredIris=null; gazeReady=false;
+  rawGazeX=rawGazeY=gazeX=gazeY=0;
+  arrowAnchorX=arrowAnchorY=null;
+}
+function updateIrisTracking(landmarks) {
+  const v=measureIrisGaze(landmarks);
+  if(!v)return false; // hold last valid gaze, never inject invalid frames
+  lastMeasuredIris=v;
+  if(!gazeReady){
+    eyeCalibrationX.push(v.x); eyeCalibrationY.push(v.y);
+    if(eyeCalibrationX.length>=10){
+      eyeNeutralX=median(eyeCalibrationX); eyeNeutralY=median(eyeCalibrationY);
+      gazeReady=true;
+    }
+    return true;
+  }
+  eyeHistoryX.push(v.x-eyeNeutralX); eyeHistoryY.push(v.y-eyeNeutralY);
+  if(eyeHistoryX.length>5)eyeHistoryX.shift();
+  if(eyeHistoryY.length>5)eyeHistoryY.shift();
+  let gx=applyGazeDeadzone(median(eyeHistoryX),settings.gazeDeadzone);
+  let gy=applyGazeDeadzone(median(eyeHistoryY),settings.gazeDeadzone);
+  // Original camera convention: Three yaw positive looks image-left, just as
+  // image-right iris motion means the user looks left in the mirrored preview.
+  // Local eye y moves downward; camera pitch positive looks upward.
+  if(settings.flipYaw) gx=-gx;
+  if(settings.flipPitch) gy=-gy;
+  rawGazeX=THREE.MathUtils.clamp(gx,-1,1);
+  rawGazeY=THREE.MathUtils.clamp(-gy,-1,1);
+  return true;
+}
+
+// ---------- Independent head position and rotation ----------
+// Eye CORNERS (not moving iris centers, and not the yaw-dependent face box)
+// form a stable head anchor. The 3D face matrix independently supplies yaw/pitch.
+function measureHeadAnchor(points) {
+  const ids=[33,133,362,263];
+  if (!points || !ids.every(i=>points[i] && Number.isFinite(points[i].x) && Number.isFinite(points[i].y))) return null;
+  return {x:ids.reduce((v,i)=>v+points[i].x,0)/4,
+          y:ids.reduce((v,i)=>v+points[i].y,0)/4};
+}
+// Room mode: DO NOT zero position relative to initial detection or recalibration.
+// The bounding box midpoint is the webcam-relative location. A centered
+// face is always (0,0), even if detection starts somewhere else.
+function cameraRelativeFaceCenter(box, flipX, gainX, gainY) {
+  if (!box || ![box.x,box.y,box.w,box.h].every(Number.isFinite)) return null;
+  const cx = box.x + box.w*0.5;
+  const cy = box.y + box.h*0.5;
+  return {
+    x: (flipX ? -1 : 1) * (cx-0.5)*2*gainX,
+    y: -(cy-0.5)*2*gainY
+  };
+}
+// The eye line from MediaPipe can point in either horizontal direction
+// depending on landmark ordering. Fold it into (-PI/2, PI/2] so straight
+// horizontal gaze is 0 without recording an arbitrary startup reference.
+function cameraRelativeEyeRoll(angle) {
+  return Number.isFinite(angle)
+    ? Math.atan2(Math.sin(2*angle),Math.cos(2*angle))*0.5
+    : null;
+}
+function angleDiff(a,b) {
+  return Math.atan2(Math.sin(a-b), Math.cos(a-b));
+}
+function smoothHeadAngle(current,target,dt,stability) {
+  // Per-second smoothing, independent of render FPS; wrap to shortest angle.
+  const s=THREE.MathUtils.clamp(stability,0,1);
+  const tau=.018+s*s*.42;
+  const alpha=1-Math.exp(-THREE.MathUtils.clamp(dt,0,.1)/tau);
+  const delta=angleDiff(target,current);
+  return Math.abs(delta)<.0025 ? current : current+delta*alpha;
+}
+function pushMedian(history,value,limit=5) {
+  history.push(value);
+  if(history.length>limit)history.shift();
+  return median(history);
+}
+function resetHeadHistory() {
+  headYawHistory.length=0;headPitchHistory.length=0;headRollHistory.length=0;
+  headYaw=headPitch=headRoll=0;
+  rawYaw=rawPitch=rawRoll=0;
+}
+function readHeadPose(matrixResult) {
+  const data=matrixResult?.data;
+  if(!data || data.length!==16 || !Array.from(data).every(Number.isFinite))return null;
+  tmpMat.fromArray(data);
+  tmpEuler.setFromRotationMatrix(tmpMat,'YXZ');
+  return {yaw:tmpEuler.y,pitch:tmpEuler.x,roll:tmpEuler.z};
+}
+function measureEyeLineRoll(points) {
+  const ids=[33,133,362,263];
+  if (!points || !ids.every(i=>points[i] && Number.isFinite(points[i].x) && Number.isFinite(points[i].y))) return null;
+  const mid=(a,b)=>({x:(a.x+b.x)*0.5,y:(a.y+b.y)*0.5});
+  const left=mid(points[33],points[133]);
+  const right=mid(points[362],points[263]);
+  return Math.atan2(right.y-left.y, right.x-left.x);
+}
+
+// ---------- Tracking ----------
+let lastDetectTs = -1;
+const tmpMat = new THREE.Matrix4();
+const tmpEuler = new THREE.Euler('YXZ');
+
+function processFrame() {
+  if (!landmarker || video.readyState < 2) return;
+  const ts = performance.now();
+  if (ts === lastDetectTs) return;
+  lastDetectTs = ts;
+
+  // Pose continues at a limited rate even while face tracking succeeds.
+  // This preserves a matching face/body reference across the handover.
+  const poseFresh=updateBodyInference(ts);
+  let result;
+  try { result = landmarker.detectForVideo(video, ts); }
+  catch (e) {
+    octx.clearRect(0,0,overlay.width,overlay.height);
+    handleMissingFace(ts);
+    return;
+  }
+
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+
+  if (!result || !result.faceLandmarks || result.faceLandmarks.length === 0) {
+    handleMissingFace(ts);
+    return;
+  }
+
+  const landmarks = result.faceLandmarks[0];
+  lastLandmarks = landmarks;
+  if(bodyFallbackActive) {
+    faceReturnBlend={start:ts,x:rawX,y:rawY,z:rawZ,travel:targetVirtualTravel};
+    bodyFallbackActive=false;
+  }
+  bodyFallbackBasis=null;
+  trackingSource='FACE';
+  updateBodyStatus();
+
+  // Bounding box aus Landmarks
+  let minX = 1, minY = 1, maxX = 0, maxY = 0;
+  for (const lm of landmarks) {
+    if (lm.x < minX) minX = lm.x;
+    if (lm.x > maxX) maxX = lm.x;
+    if (lm.y < minY) minY = lm.y;
+    if (lm.y > maxY) maxY = lm.y;
+  }
+  const cxN = (minX + maxX) / 2;
+  const cyN = (minY + maxY) / 2;
+  const sz = maxY - minY;
+  lastFaceSize = sz;
+  lastBox = { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+  visibleFace = sz > 0.05 && Number.isFinite(sz);
+  if(visibleFace && poseFresh && bodySample)captureBodyBridge(bodySample,lastBox);
+  // Position from rigid eye corners, not the bounding box's center:
+  // rotating the head must not be interpreted as moving the entire face box.
+  const anchor=measureHeadAnchor(landmarks);
+  const measuredOrientation=readHeadPose(result.facialTransformationMatrixes?.[0]);
+  if(anchor)latestHeadAnchor=anchor;
+  if(measuredOrientation)latestHeadOrientation=measuredOrientation;
+  if (visibleFace && !referenceReady) {
+    calibrationSamples.push(sz);
+    if(anchor){anchorCalibrationX.push(anchor.x);anchorCalibrationY.push(anchor.y);}
+    if(measuredOrientation){
+      yawCalibration.push(measuredOrientation.yaw);
+      pitchCalibration.push(measuredOrientation.pitch);
+      rollCalibration.push(measuredOrientation.roll);
+    }
+    if (calibrationSamples.length >= CALIBRATION_FRAMES) {
+      const sorted=[...calibrationSamples].sort((a,b)=>a-b);
+      calibBaseFaceSize=(sorted[4]+sorted[5])*.5;
+      if(anchorCalibrationX.length){
+        anchorNeutral.x=median(anchorCalibrationX);
+        anchorNeutral.y=median(anchorCalibrationY);
+        anchorNeutralReady=true;
+      }
+      if(yawCalibration.length){
+        orientationNeutral.yaw=median(yawCalibration);
+        orientationNeutral.pitch=median(pitchCalibration);
+        orientationNeutral.roll=median(rollCalibration);
+        orientationNeutralReady=true;
+      }
+      referenceReady=true;
+      if(settings.mode !== 'room') {
+        headX=rawX=0;headY=rawY=0;
+        resetHeadHistory();
+      }
+      headZ=rawZ=BASE_DISTANCE;
+      targetVirtualTravel=virtualTravel=0;
+      applyRoomDepth();
+    }
+  }
+
+  // Room mode: webcam center (0.5/0.5) is a FIXED origin, never the
+  // initial facebox or a facebox recorded when pressing R.
+  if(settings.mode === 'room' && visibleFace) {
+    const absolute = cameraRelativeFaceCenter(lastBox,settings.flipX,settings.gainX,settings.gainY);
+    if(absolute){rawX=absolute.x;rawY=absolute.y;}
+  } else if(anchor && referenceReady) {
+    // Preserve the established relative behavior of the other three modes.
+    if(!anchorNeutralReady){
+      anchorNeutral.x=anchor.x;anchorNeutral.y=anchor.y;
+      anchorNeutralReady=true;
+    }
+    const nx=(anchor.x-anchorNeutral.x)*2;
+    rawX=(settings.flipX?-nx:nx)*settings.gainX;
+    rawY=-(anchor.y-anchorNeutral.y)*2*settings.gainY;
+  }
+
+  // Face and body fallback use exactly the same distance mapping.
+  faceSizeForDepth=sz;
+  updateDepthEstimate(sz);
+  if(faceReturnBlend) {
+    const fraction=(ts-faceReturnBlend.start)/BODY_RECOVERY_MS;
+    rawX=blendNumeric(faceReturnBlend.x,rawX,fraction);
+    rawY=blendNumeric(faceReturnBlend.y,rawY,fraction);
+    rawZ=blendNumeric(faceReturnBlend.z,rawZ,fraction);
+    targetVirtualTravel=blendNumeric(faceReturnBlend.travel,targetVirtualTravel,fraction);
+    if(fraction>=1)faceReturnBlend=null;
+  }
+
+  latestEyeLineRoll = measureEyeLineRoll(landmarks);
+
+  // Room: real webcam-facing head orientation (frontal = 0), even if
+  // the first frame begins at a strong yaw/pitch/roll. Other modes retain
+  // their original relative neutral-angle calibration.
+  if(measuredOrientation && (settings.mode === 'room' || referenceReady)) {
+    if(settings.mode !== 'room' && !orientationNeutralReady){
+      orientationNeutral.yaw=measuredOrientation.yaw;
+      orientationNeutral.pitch=measuredOrientation.pitch;
+      orientationNeutral.roll=measuredOrientation.roll;
+      orientationNeutralReady=true;
+      resetHeadHistory();
+    }
+    let yaw=settings.mode === 'room'
+      ? measuredOrientation.yaw
+      : angleDiff(measuredOrientation.yaw,orientationNeutral.yaw);
+    let pitch=settings.mode === 'room'
+      ? measuredOrientation.pitch
+      : angleDiff(measuredOrientation.pitch,orientationNeutral.pitch);
+    let roll=settings.mode === 'room'
+      ? measuredOrientation.roll
+      : angleDiff(measuredOrientation.roll,orientationNeutral.roll);
+    if(Number.isFinite(latestEyeLineRoll)) {
+      if(settings.mode === 'room') {
+        const eyeRoll=cameraRelativeEyeRoll(latestEyeLineRoll);
+        roll = roll*0.35 + eyeRoll*0.65;
+      } else {
+        if(!eyeRollNeutralReady){ eyeRollNeutral=latestEyeLineRoll; eyeRollNeutralReady=true; }
+        const eyeRoll=angleDiff(latestEyeLineRoll,eyeRollNeutral);
+        roll = roll*0.35 + eyeRoll*0.65;
+      }
+    }
+    if(settings.flipX){yaw=-yaw;roll=-roll;}
+    if(settings.flipYaw)yaw=-yaw;
+    if(settings.flipPitch)pitch=-pitch;
+    rawYaw=pushMedian(headYawHistory,THREE.MathUtils.clamp(yaw,-1.0,1.0));
+    rawPitch=pushMedian(headPitchHistory,THREE.MathUtils.clamp(pitch,-.85,.85));
+    rawRoll=pushMedian(headRollHistory,THREE.MathUtils.clamp(roll,-.5,.5));
+  }
+
+  // Iris position relative to fixed eye corners, not blendshape scores.
+  // With an occluded/closed eye the previous pose is preserved.
+  updateIrisTracking(landmarks);
+
+  statusEl.innerHTML = '<span class="ok">● Face detected</span>' + (paused ? ' <span class="warn">(Paused)</span>' : '');
+
+  // -------- Draw tracking overlay --------
+  const W = overlay.width, H = overlay.height;
+
+  if (settings.showLandmarks) {
+    octx.fillStyle = 'rgba(120, 220, 255, 0.6)';
+    for (const lm of landmarks) {
+      octx.beginPath();
+      octx.arc(lm.x * W, lm.y * H, 1.1, 0, Math.PI*2);
+      octx.fill();
+    }
+    // Highlight eye corners
+    const eyeIdx = [33, 133, 159, 145, 362, 263, 386, 374, 468, 473];
+    octx.fillStyle = '#ffee44';
+    for (const idx of eyeIdx) {
+      const lm = landmarks[idx];
+      if (lm) {
+        octx.beginPath();
+        octx.arc(lm.x * W, lm.y * H, 3.5, 0, Math.PI*2);
+        octx.fill();
+      }
+    }
+  }
+
+  if (settings.showBox && lastBox) {
+    const bx = lastBox.x * W, by = lastBox.y * H;
+    const bw = lastBox.w * W, bh = lastBox.h * H;
+
+    octx.lineWidth = Math.max(3, W * 0.005);
+    octx.strokeStyle = '#5ef';
+    octx.shadowColor = '#5ef';
+    octx.shadowBlur = 10;
+    octx.strokeRect(bx, by, bw, bh);
+    octx.shadowBlur = 0;
+
+    const corner = Math.min(bw, bh) * 0.18;
+    octx.lineWidth = Math.max(4, W * 0.007);
+    octx.strokeStyle = '#fff';
+    const x0 = bx, y0 = by, x1 = bx + bw, y1 = by + bh;
+    octx.beginPath();
+    octx.moveTo(x0, y0 + corner); octx.lineTo(x0, y0); octx.lineTo(x0 + corner, y0);
+    octx.moveTo(x1 - corner, y0); octx.lineTo(x1, y0); octx.lineTo(x1, y0 + corner);
+    octx.moveTo(x1, y1 - corner); octx.lineTo(x1, y1); octx.lineTo(x1 - corner, y1);
+    octx.moveTo(x0 + corner, y1); octx.lineTo(x0, y1); octx.lineTo(x0, y1 - corner);
+    octx.stroke();
+
+    octx.fillStyle = '#5ef';
+    octx.beginPath();
+    octx.arc(bx + bw/2, by + bh/2, Math.max(3, W * 0.005), 0, Math.PI*2);
+    octx.fill();
+  }
+
+  // Visible head axis from stable anatomical landmarks. Yellow eye line
+  // rotates with the head; the nose marker shows facial orientation. It is
+  // NOT used as a replacement for the 3D pose matrix.
+  if (settings.showHeadAxis) {
+    const point=(i)=>landmarks[i];
+    const midpoint=(a,b)=>({x:(a.x+b.x)*.5,y:(a.y+b.y)*.5});
+    const pts=[33,133,362,263,1].map(point);
+    if(pts.every(p=>p && Number.isFinite(p.x) && Number.isFinite(p.y))) {
+      const eyeA=midpoint(pts[0],pts[1]);
+      const eyeB=midpoint(pts[2],pts[3]);
+      const mid=midpoint(eyeA,eyeB),nose=pts[4];
+      octx.save();octx.strokeStyle='#ffe659';octx.fillStyle='#ffe659';
+      octx.lineWidth=Math.max(2,W*.004);octx.shadowColor='#ffe659';octx.shadowBlur=5;
+      octx.beginPath();octx.moveTo(eyeA.x*W,eyeA.y*H);octx.lineTo(eyeB.x*W,eyeB.y*H);
+      octx.moveTo(mid.x*W,mid.y*H);octx.lineTo(nose.x*W,nose.y*H);octx.stroke();
+      for(const p of [eyeA,eyeB,nose]){octx.beginPath();octx.arc(p.x*W,p.y*H,3.3,0,Math.PI*2);octx.fill();}
+      octx.restore();
+    }
+  }
+
+  // Gaze direction from the SMOOTHED iris direction; the arrow must never
+  // direkt aus den sprunghaften MediaPipe-Blendscores zeichnen.
+  if (settings.showGazeArrow && lastBox && gazeReady) {
+    // Use stable eye corners for the origin, not the moving iris centers.
+    const corners=[33,133,362,263].map(i=>landmarks[i]).filter(Boolean);
+    const targetX=(corners.length===4?corners.reduce((sum,p)=>sum+p.x,0)/4:lastBox.x+lastBox.w*.5)*W;
+    const targetY=(corners.length===4?corners.reduce((sum,p)=>sum+p.y,0)/4:lastBox.y+lastBox.h*.42)*H;
+    arrowAnchorX=arrowAnchorX===null?targetX:arrowAnchorX+(targetX-arrowAnchorX)*.3;
+    arrowAnchorY=arrowAnchorY===null?targetY:arrowAnchorY+(targetY-arrowAnchorY)*.3;
+    const cx=arrowAnchorX, cy=arrowAnchorY;
+    // Overlay and video are both horizontally mirrored by CSS.
+    const dx=gazeX*lastBox.w*W*1.2;
+    const dy=-gazeY*lastBox.h*H*.85;
+    const len=Math.hypot(dx,dy);
+    octx.fillStyle='#ffee44'; octx.strokeStyle='#ffaa00';
+    octx.beginPath(); octx.arc(cx,cy,Math.max(3,W*.005),0,Math.PI*2);octx.fill();
+    if(len>3){
+      octx.lineWidth=Math.max(2,W*.004);octx.shadowColor='#ffaa00';octx.shadowBlur=7;
+      octx.beginPath();octx.moveTo(cx,cy);octx.lineTo(cx+dx,cy+dy);octx.stroke();
+      const ang=Math.atan2(dy,dx), ah=Math.max(6,W*.012);
+      octx.beginPath();octx.moveTo(cx+dx,cy+dy);
+      octx.lineTo(cx+dx-ah*Math.cos(ang-.4),cy+dy-ah*Math.sin(ang-.4));
+      octx.lineTo(cx+dx-ah*Math.cos(ang+.4),cy+dy-ah*Math.sin(ang+.4));
+      octx.closePath();octx.fill();octx.shadowBlur=0;
+    }
+  }
+}
+
+// ---------- UI Wiring ----------
+const panel = document.getElementById('panel');
+document.getElementById('panelHeader').addEventListener('click', () => panel.classList.toggle('collapsed'));
+
+function bindCheckbox(id, key) {
+  const el = document.getElementById(id);
+  el.checked = settings[key];
+  el.addEventListener('change', () => {
+    settings[key] = el.checked;
+    if(key==='useBodyFallback'&&!el.checked){bodyFallbackActive=false;bodyFallbackBasis=null;faceReturnBlend=null;if(!visibleFace){trackingSource='RETURN_TO_NEUTRAL';neutralizeViewTargets();}updateBodyStatus();}
+    saveConfiguration();
+  });
+}
+function bindSlider(id, key) {
+  const el = document.getElementById(id);
+  const v = document.getElementById(id + 'v');
+  el.value = settings[key];
+  v.textContent = Number(settings[key]).toFixed(2);
+  el.addEventListener('input', () => {
+    settings[key] = parseFloat(el.value);
+    v.textContent = Number(settings[key]).toFixed(2);
+    if (key === 'depthTravel') {
+      targetVirtualTravel = settings.useHeadPos && referenceReady && (visibleFace || bodyFallbackActive)
+        ? computeRoomTravel(faceSizeForDepth, calibBaseFaceSize, settings.depthTravel, rawZ) : 0;
+    }
+    scheduleConfigurationSave();
+  });
+  el.addEventListener('change', saveConfiguration);
+}
+CONFIG_BOOLEAN_KEYS.forEach(k => bindCheckbox(k, k));
+CONFIG_SLIDER_KEYS.forEach(k => bindSlider(k, k));
+for (const id of ['roomDepth','depthTravel','showTestArrow','showScreenPlane']) {
+  document.getElementById(id).addEventListener(id==='roomDepth'?'input':'change',applyRoomDepth);
+}
+
+function applyModeChange(nextMode){
+  if (!CONFIG_VALID_MODES.includes(nextMode)) return;
+  settings.mode = nextMode;
+  headYawHistory.length = 0;
+  headPitchHistory.length = 0;
+  headRollHistory.length = 0;
+  if (nextMode !== 'room') {
+    bodyFallbackActive = false;
+    bodyFallbackBasis = null;
+    faceReturnBlend = null;
+    if (!visibleFace) neutralizeViewTargets();
+  }
+}
+function syncSettingsControls(){
+  for (const key of CONFIG_BOOLEAN_KEYS) document.getElementById(key).checked = settings[key];
+  for (const key of CONFIG_SLIDER_KEYS) {
+    document.getElementById(key).value = settings[key];
+    document.getElementById(key + 'v').textContent = Number(settings[key]).toFixed(2);
+  }
+  for (const radio of document.querySelectorAll('input[name="mode"]')) radio.checked = radio.value === settings.mode;
+}
+function applyConfiguration(nextSettings){
+  const previousMode = settings.mode;
+  const previousFallback = settings.useBodyFallback;
+  Object.assign(settings, nextSettings);
+  syncSettingsControls();
+  if (previousMode !== settings.mode) applyModeChange(settings.mode);
+  if (previousFallback && !settings.useBodyFallback) {
+    bodyFallbackActive = false;
+    bodyFallbackBasis = null;
+    faceReturnBlend = null;
+    if (!visibleFace) { trackingSource = 'RETURN_TO_NEUTRAL'; neutralizeViewTargets(); }
+    updateBodyStatus();
+  }
+  targetVirtualTravel = settings.useHeadPos && referenceReady && (visibleFace || bodyFallbackActive)
+    ? computeRoomTravel(faceSizeForDepth, calibBaseFaceSize, settings.depthTravel, rawZ) : 0;
+  applyRoomDepth();
+}
+document.querySelectorAll('input[name="mode"]').forEach(r => {
+  r.checked = r.value === settings.mode;
+  r.addEventListener('change', () => {
+    if (!r.checked) return;
+    applyModeChange(r.value);
+    saveConfiguration();
+  });
+});
+
+document.getElementById('saveConfigBtn').addEventListener('click', saveConfiguration);
+document.getElementById('restoreConfigBtn').addEventListener('click', () => {
+  applyConfiguration(CONFIG_DEFAULTS);
+  saveConfiguration();
+  showConfigStatus('Factory defaults restored and saved. Calibrate with R if needed.');
+});
+document.getElementById('exportConfigBtn').addEventListener('click', () => {
+  const text = JSON.stringify(createConfigurationPayload(), null, 2) + '\n';
+  const url = URL.createObjectURL(new Blob([text], {type:'application/json'}));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'headtracking3d-settings.json';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showConfigStatus('Exported the current settings to a JSON file.');
+});
+const configImportFile = document.getElementById('configImportFile');
+document.getElementById('importConfigBtn').addEventListener('click', () => configImportFile.click());
+configImportFile.addEventListener('change', async () => {
+  const file = configImportFile.files?.[0];
+  if (!file) return;
+  try {
+    if (file.size > 65536) throw new Error('The configuration file is too large.');
+    const parsed = validateConfigurationPayload(JSON.parse(await file.text()));
+    if (!parsed) throw new Error('Invalid or unsupported configuration version.');
+    applyConfiguration(parsed);
+    if (saveConfiguration()) showConfigStatus('Imported settings and saved them in this browser.');
+  } catch (error) {
+    showConfigStatus('Import failed: ' + (error.message || 'Invalid JSON'), true);
+  } finally {
+    configImportFile.value = '';
+  }
+});
+window.addEventListener('pagehide', () => { if (pendingConfigSave !== null) saveConfiguration(); });
+if (storedConfiguration) showConfigStatus('Saved settings restored automatically.');
+
+document.getElementById('calibBtn').addEventListener('click', () => {
+  recalibrateDepth();
+});
+function recalibrateDepth() {
+  if (!visibleFace || !Number.isFinite(lastFaceSize) || lastFaceSize <= 0.05) return;
+  calibBaseFaceSize = lastFaceSize;
+  if(bodySample && bodySample.timestamp && lastBox)captureBodyBridge(bodySample,lastBox);
+  calibrationSamples.length = 0;
+  anchorCalibrationX.length=0;anchorCalibrationY.length=0;
+  yawCalibration.length=0;pitchCalibration.length=0;rollCalibration.length=0;
+  referenceReady = true;
+  if(latestHeadAnchor){
+    anchorNeutral.x=latestHeadAnchor.x;anchorNeutral.y=latestHeadAnchor.y;
+    anchorNeutralReady=true;
+    if(settings.mode !== 'room') {headX=rawX=0;headY=rawY=0;}
+  }
+  if(latestHeadOrientation){
+    orientationNeutral.yaw=latestHeadOrientation.yaw;
+    orientationNeutral.pitch=latestHeadOrientation.pitch;
+    orientationNeutral.roll=latestHeadOrientation.roll;
+    orientationNeutralReady=true;
+  }
+  if(Number.isFinite(latestEyeLineRoll)){ eyeRollNeutral=latestEyeLineRoll; eyeRollNeutralReady=true; }
+  if(settings.mode !== 'room') resetHeadHistory();
+  // In Room mode R must not recenter camera-relative X/Y or yaw/pitch/roll.
+  // Eye neutral is independent of head position; treat current centered gaze
+  // as straight-ahead when the user presses R.
+  if(lastMeasuredIris){
+    eyeNeutralX=lastMeasuredIris.x; eyeNeutralY=lastMeasuredIris.y;
+    gazeReady=true; eyeHistoryX.length=0; eyeHistoryY.length=0;
+    rawGazeX=rawGazeY=gazeX=gazeY=0;
+  }
+  if(settings.mode==='room') {
+    rawZ=BASE_DISTANCE;targetVirtualTravel=0;
+    // Let position and world offset converge: never snap on R.
+  } else {
+    rawZ=headZ=BASE_DISTANCE;targetVirtualTravel=virtualTravel=legacyVirtualTravel=0;
+  }
+  applyRoomDepth();
+}
+document.getElementById('pauseBtn').addEventListener('click', () => { paused = !paused; });
+document.getElementById('resetBtn').addEventListener('click', () => {
+  // Reset must not momentarily jump an off-centre Room camera to zero.
+  if(settings.mode !== 'room') {
+    headX = headY = rawX = rawY = 0;
+    headYaw = headPitch = headRoll = rawYaw = rawPitch = rawRoll = 0;
+    latestEyeLineRoll = null; eyeRollNeutral = 0; eyeRollNeutralReady = false;
+  }
+  rawZ=BASE_DISTANCE;
+  if(settings.mode!=='room')headZ=BASE_DISTANCE;
+  resetEyeTracking();
+  if (visibleFace) recalibrateDepth();
+  else {
+    targetVirtualTravel=0;
+    if(settings.mode!=='room')virtualTravel=legacyVirtualTravel=0;
+    applyRoomDepth();
+  }
+});
+
+window.addEventListener('keydown', e => {
+  if (e.target && (e.target.tagName === 'INPUT')) return;
+  if (e.code === 'Space') paused = !paused;
+  if (e.code === 'KeyR') recalibrateDepth();
+  if (e.code === 'KeyH') panel.classList.toggle('collapsed');
+});
+
+// ---------- Source-aware, speed-limited camera travel ----------
+// A sudden 2m tracking jump updates only the TARGET. Rendered eye position
+// approaches it smoothly at a bounded world-space speed; no discontinuity.
+function approachScalar(current,target,deltaTime,tau,maxSpeed) {
+  const dt=Math.max(0,Math.min(.1,deltaTime));
+  if(dt===0 || !Number.isFinite(target))return current;
+  const alpha=1-Math.exp(-dt/Math.max(.001,tau));
+  const desired=(target-current)*alpha;
+  return current+THREE.MathUtils.clamp(desired,-maxSpeed*dt,maxSpeed*dt);
+}
+function approachCameraPosition(current,target,deltaTime,source,smoothing) {
+  const dt=Math.max(0,Math.min(.1,deltaTime));
+  if(dt===0)return {...current};
+  const body=source.startsWith('BODY'),lost=source==='RETURN_TO_NEUTRAL';
+  const tau=lost?.48:body?.30:Math.max(.035,-(1/60)/Math.log(Math.max(.001,1-smoothing)));
+  const speed=lost?2.0:body?2.8:4.0; // world units per second
+  const alpha=1-Math.exp(-dt/tau);
+  const dx=(target.x-current.x)*alpha;
+  const dy=(target.y-current.y)*alpha;
+  const dz=(target.z-current.z)*alpha;
+  const distance=Math.hypot(dx,dy,dz);
+  const scale=distance>speed*dt ? speed*dt/distance : 1;
+  return {x:current.x+dx*scale,y:current.y+dy*scale,z:current.z+dz*scale};
+}
+// ---------- Main loop ----------
+const clock = new THREE.Clock();
+let objectAnimationTime=0;
+let lastGazeFrame=performance.now();
+
+function animate() {
+  requestAnimationFrame(animate);
+  if (!paused) processFrame();
+
+  const s = settings.smooth;
+  const frameNow=performance.now();
+  const gazeDt=Math.max(0,Math.min(.1,(frameNow-lastGazeFrame)/1000));
+  lastGazeFrame=frameNow;
+  if(settings.mode==='room') {
+    const moved=approachCameraPosition(
+      {x:headX,y:headY,z:headZ},
+      {x:rawX,y:rawY,z:rawZ},gazeDt,trackingSource,s);
+    headX=moved.x;headY=moved.y;headZ=moved.z;
+  } else {
+    // Legacy modes keep their previous smoothing/physical projection.
+    headX += (rawX-headX)*s;
+    headY += (rawY-headY)*s;
+    headZ += (rawZ-headZ)*s;
+  }
+  headYaw=smoothHeadAngle(headYaw,rawYaw,gazeDt,settings.headSmooth);
+  headPitch=smoothHeadAngle(headPitch,rawPitch,gazeDt,settings.headSmooth);
+  headRoll=smoothHeadAngle(headRoll,rawRoll,gazeDt,settings.headSmooth);
+  gazeX=gazeStep(gazeX,rawGazeX,gazeDt,settings.gazeSmooth);
+  gazeY=gazeStep(gazeY,rawGazeY,gazeDt,settings.gazeSmooth);
+  if (!settings.useHeadPos) targetVirtualTravel = 0;
+  // Body fallback contributes to depth continuously when face landmarks
+  // are absent; do not overwrite a handed-over target with stale face data.
+  if (settings.useHeadPos && referenceReady && visibleFace && !faceReturnBlend) {
+    targetVirtualTravel = computeRoomTravel(lastFaceSize, calibBaseFaceSize, settings.depthTravel, headZ);
+  }
+  virtualTravel=settings.mode==='room'
+    ? approachScalar(virtualTravel,targetVirtualTravel,gazeDt,.32,1.7)
+    : virtualTravel+(targetVirtualTravel-virtualTravel)*s;
+  // The other camera modes are left untouched, including their original
+  // screen geometry and virtual-world travel characteristics.
+  const oldTargetTravel = settings.useHeadPos && referenceReady && visibleFace
+    ? computeVirtualTravel(lastFaceSize,calibBaseFaceSize,settings.depthTravel) : 0;
+  legacyVirtualTravel += (oldTargetTravel-legacyVirtualTravel)*s;
+  applyRoomDepth();
+
+  updateCamera();
+
+  const renderDt = Math.min(clock.getDelta(), 0.1);
+  const dt = settings.freezeObjects ? 0 : renderDt;
+  objectAnimationTime += dt;
+  const t = objectAnimationTime;
+  cube.rotation.x += dt * 0.6;  cube.rotation.y += dt * 0.8;
+  torus.rotation.x += dt * 0.5; torus.rotation.y += dt * 0.9;
+  octa.rotation.y += dt * 0.7;  octa.rotation.x += dt * 0.3;
+  sphere.position.y = 0.5 + Math.sin(t * 1.2) * 0.3;
+  cone.rotation.y += dt * 0.4;
+  dodec.rotation.y += dt * 0.5; dodec.rotation.x += dt * 0.3;
+  icos.rotation.y -= dt * 0.6;
+  cyl.rotation.x += dt * 0.4;
+  torus2.rotation.x += dt * 0.3; torus2.rotation.z += dt * 0.5;
+  backCube.rotation.y += dt * 1.0;
+  tetra.rotation.y += dt * 0.7; tetra.rotation.x += dt * 0.4;
+  sphereR.position.x = 2.5 + Math.cos(t * 0.9) * 0.3;
+
+  renderer.render(scene, camera);
+
+  metricsEl.textContent =
+    `screen z=0  roomOffset=${settings.roomDepth.toFixed(2)}  dive=${(settings.mode === 'room' ? virtualTravel : legacyVirtualTravel).toFixed(2)}\n` +
+    `source=${trackingSource} | mode=${settings.mode} | ${settings.mode === 'room' ? 'Camera origin (0.5/0.5)' : 'Calibration origin'} | pos x=${headX.toFixed(2)} y=${headY.toFixed(2)} z=${(settings.mode === 'room' ? computeRoomProjectionZ(headZ) : headZ).toFixed(2)} [sensor ${headZ.toFixed(2)}]\n` +
+    `head yaw=${headYaw.toFixed(2)} pitch=${headPitch.toFixed(2)} roll=${headRoll.toFixed(2)} ${settings.useHeadRot?'ON':'OFF'}\n` +
+    `gaze iris x=${gazeX.toFixed(2)} y=${gazeY.toFixed(2)} ${gazeReady ? 'STABLE' : 'CALIBRATING...'} | size=${lastFaceSize.toFixed(3)} ref=${referenceReady ? calibBaseFaceSize.toFixed(3) : 'AUTO'}`;
+}
+
+(async () => {
+  try {
+    statusEl.textContent = 'Starting webcam…';
+    await startCamera();
+    statusEl.textContent = 'Loading face model (~3 MB)…';
+    await initFaceLandmarker();
+    statusEl.innerHTML = '<span class="ok">● Ready</span>';
+    // Non-blocking: a pose model failure must never prevent face tracking.
+    void initBodyLandmarker();
+    animate();
+  } catch (err) {
+    statusEl.innerHTML = '<span class="err">Error: ' + (err.message || err) + '</span>';
+    console.error(err);
+  }
+})();
+</script>
+</body>
+</html>
